@@ -1,0 +1,128 @@
+# Example Kubernetes Deployment for siglip-embedder.
+#
+# This template was originally written for SuanLi (suanli.cn) — note the
+# `gongjiyun.com/*` annotations and node-selector keys, which are SuanLi-
+# specific. Adapt the affinity / GPU-selector blocks to your cluster (EKS:
+# `node.kubernetes.io/instance-type`, GKE: `cloud.google.com/gke-accelerator`,
+# vanilla: `nvidia.com/gpu.product`).
+#
+# The container itself is platform-agnostic. On any cluster you only need to:
+#   1. Replace the image with your registry path
+#   2. Drop or rewrite the affinity / nodeSelector to match your GPU labels
+#   3. Set SIGLIP_AUTH_TOKEN via a Secret if the pod is reachable from the
+#      public internet
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: siglip-embedder
+    gongjiyun.com/task-type: deployment
+  name: siglip-embedder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: siglip-embedder
+  strategy: {}
+  template:
+    metadata:
+      annotations:
+        quota.k8s.io/enabled: 'true'
+        # ~6 GiB image + small log spool. Bump if you switch to a larger
+        # SigLIP variant.
+        quota.k8s.io/ephemeral-storage: 16Gi
+        quota.k8s.io/project-id: auto
+      labels:
+        app: siglip-embedder
+        gongjiyun.com/task-type: deployment
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - preference:
+                matchExpressions:
+                  - key: kubernetes.io/role
+                    operator: In
+                    values:
+                      - node
+              weight: 80
+            - preference:
+                matchExpressions:
+                  - key: gongjiyun.com/can-be-used-develop
+                    operator: NotIn
+                    values:
+                      - 'true'
+              weight: 20
+          # Any modern Ada/Ampere card is enough for SigLIP so400m at fp16.
+          # Pin to specific SKUs only if your scheduler keeps placing the pod
+          # on memory-anemic instances.
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values:
+                      - NVIDIA-GeForce-RTX-4090
+                      - NVIDIA-GeForce-RTX-3090
+
+      containers:
+        - name: siglip
+          image: ghcr.io/<you>/siglip-embedder:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            # GPU forward-pass batch size. so400m at fp16 fits ~64 on a 4090
+            # (24 GB), 32 leaves headroom for the input tensor pipeline
+            # without measurably hurting throughput.
+            - name: SIGLIP_BATCH_SIZE
+              value: "32"
+            # Concurrent URL fetches per /embed/batch request.
+            - name: SIGLIP_FETCH_CONCURRENCY
+              value: "16"
+            # REQUIRED on production deploys with public ingress. Pull from a
+            # Secret rather than hardcoding here.
+            # - name: SIGLIP_AUTH_TOKEN
+            #   valueFrom:
+            #     secretKeyRef: { name: siglip-auth, key: token }
+          resources:
+            limits:
+              cpu: '8'
+              memory: 24Gi
+              nvidia.com/gpu: '1'
+            requests:
+              cpu: '2'
+              memory: 8Gi
+              nvidia.com/gpu: '1'
+
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
+
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+
+      priorityClassName: default-pc
+      schedulerName: requested-to-capacity-ratio-custom-scheduler
+status: {}

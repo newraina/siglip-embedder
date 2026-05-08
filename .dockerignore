@@ -1,0 +1,12 @@
+__pycache__
+*.pyc
+.venv
+.env
+.env.*
+.git
+.gitignore
+.github
+.DS_Store
+README.md
+LICENSE
+examples
