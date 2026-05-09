@@ -1,6 +1,11 @@
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
-transformers>=4.49.0,<5
+# Pinned exact: 4.52 changed the image-processor default from slow to fast,
+# which produces minor numerical differences in embeddings. Bumping past 4.51
+# silently shifts the vector space and invalidates the existing Vectorize index.
+# See server.py::_check_use_fast and infra/siglip-modal/modal_app.py for the
+# matching pin. If you must upgrade, plan a full re-embed.
+transformers==4.50.3
 pillow==11.0.0
 httpx==0.27.2
 huggingface_hub==0.26.5

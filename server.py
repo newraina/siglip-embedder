@@ -71,7 +71,12 @@ DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
 
 LOG.info("loading model %s on %s (%s)", MODEL_PATH, DEVICE, DTYPE)
 _t0 = time.time()
-processor = AutoProcessor.from_pretrained(MODEL_PATH)
+# use_fast=False is load-bearing for vector space stability. transformers 4.52
+# flips the image-processor default to fast, which yields slightly different
+# embeddings — silent drift relative to the existing Vectorize index. Keep
+# explicit even though 4.50.x defaults to slow, so a future transformers bump
+# doesn't quietly fork the vector space. Same lock in infra/siglip-modal.
+processor = AutoProcessor.from_pretrained(MODEL_PATH, use_fast=False)
 model = AutoModel.from_pretrained(MODEL_PATH, torch_dtype=DTYPE).to(DEVICE).eval()
 EMBED_DIM = int(model.config.projection_dim) if hasattr(model.config, "projection_dim") else int(
     model.config.vision_config.hidden_size
